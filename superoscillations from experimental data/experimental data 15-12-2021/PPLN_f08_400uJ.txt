@@ -1,0 +1,6 @@
+PPLN crystal 
+Laser power=400uJ
+frequency=0.8 THz
+Room temperature
+Scan from / Scan to / Step size  /# of scans / Scan axis / Axis zero / Temperature / Lockin phase / Sensitivity / Time constant
+-10.000000 80.000000 0.050000 5.000000 7.000000 0.000000 0.000000 162.040000 12.000000 7.000000
