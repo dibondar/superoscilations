@@ -1,0 +1,5 @@
+Superoscillation test
+Frequency =all THz
+room temperature purged measurement
+Scan from / Scan to / Step size  /# of scans / Scan axis / Axis zero / Temperature / Lockin phase / Sensitivity / Time constant
+-5.000000 5.000000 0.050000 5.000000 7.000000 0.000000 0.000000 154.630000 12.000000 7.000000
