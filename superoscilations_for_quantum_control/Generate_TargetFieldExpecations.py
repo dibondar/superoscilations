@@ -23,37 +23,23 @@ os.environ['MKL_NUM_THREADS'] = '{}'.format(threads)
 from quspin.operators import hamiltonian, exp_op, quantum_operator  # operators
 from quspin.basis import spinful_fermion_basis_1d  # Hilbert space basis
 from quspin.tools.measurements import obs_vs_time  # calculating dynamics
-from quspin.tools.evolution import evolve  # evolving system
+from quspin.tools.evolution import evolve  #evolving system
 import numpy as np  # general math functions
+from scipy.sparse.linalg import eigsh
 from time import time  # tool for calculating computation time
 from tqdm import tqdm
 import matplotlib.pyplot as plt  # plotting library
-from scipy.signal.windows import blackman
-from scipy import fftpack
 from quspin.tools.measurements import project_op
-from tools import HubbardModel as fhmodel, InitializeArchive
+from tools import parameter_instantiate as hhg  # Used for scaling units.
 import psutil
 
-
-
-# note cpu_count for logical=False returns the wrong number for multi-socket CPUs.
+# # note cpu_count for logical=False returns the wrong number for multi-socket CPUs.
 print("logical cores available {}".format(psutil.cpu_count(logical=True)))
 t_init = time()
 np.__config__.show()
 
-
-########################################################################################################################
-# Declare Parameters
-########################################################################################################################
-
-"""Laser Pulse parameters"""
-field = 32.9  # field angular frequency THz
-F0 = 4.5  # Field amplitude MV/cm
-a = 4   # Lattice constant Angstroms
-
-"""Parameters for a target or reference field"""
-# Hubbard model
-L = 10             # system size
+"""Hubbard model Parameters"""
+L = 10              # system size
 N_up = L // 2 + L % 2   # number of fermions with spin up
 N_down = L // 2     # number of fermions with spin down
 N = N_up + N_down   # number of particles
@@ -61,284 +47,189 @@ t0 = 0.52       # hopping strength
 U = 0.0 * t0    # interaction strength
 pbc = True
 
-# Parameters for evolving the system
-cycles = 10     # time in cycles of field frequency
-n_steps = 10000  # Number of steps for time resolution
+"""Laser pulse parameters"""
+field = 32.9  # field angular frequency THz
+F0 = 10  # Field amplitude MV/cm
+a = 4  # Lattice constant Angstroms
 
-# Bundle parameters to pass to Hubbard Model class for unit conversion
-tgt_params = dict(
-    nx=L,
-    hopping=t0,
-    interaction=U,
-    n_up=N_up,
-    n_down=N_down,
-    angular_frequency=field,
-    lattice_constant=a,
-    field_amplitude=F0,
-    chem_potential=0,
-    cycles=cycles,
-    n_steps=n_steps,
-    ny=0,       # 1D simulations do not use y-axis
-    soc=0,      # No spin orbit coupling
-    gamma=0     #
-)
-
-# get the converted units for creating a target field
-tgt = fhmodel(**tgt_params)
-start = 0.0
-stop = tgt.stop
-times, dt = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True)
-
-########################################################################################################################
-# Get the directory and set tag for data saving
-########################################################################################################################
-
-# Is this your first time running any program? If so, make sure your directories are set up but setting to true
-make_archive = False
-# Reference: 0 for Targets, 1 for Tracking, 2 for superoscillations, 3 for importing anything else
-sim_type = 0
-
-# Build out the directory
-directory = InitializeArchive(directory_number=sim_type)
-if make_archive:
-    directory.build_archive()
-
-lib = directory.get_dir()
-data_path = lib['data path']
-plot_path = lib['plots path']
-plot_name = lib['plot name']
-
-# Get the unique tag for these simulations. Done externally in order to ensure consistency
-filetag = lib['tag'] + tgt.tag
-########################################################################################################################
-# Define the relevant functions
-########################################################################################################################
+"""instantiate parameters with proper unit scaling"""
+lat = hhg(field=field, nup=N_up, ndown=N_down, nx=L, ny=0, U=U, t=t0, F0=F0, a=a, pbc=pbc)
+"""Define e^i*phi for later dynamics. Important point here is that for later implementations of tracking, we
+will pass phi as a global variable that will be modified as appropriate during evolution"""
 
 
 def phi(current_time):
-    """
-    Defines Phi(t) for an individual time step
-    :param current_time: Current time
-    :return: Phi(current time)
-    """
-    return (tgt.a * tgt.F0 / tgt.omega) * (np.sin(tgt.omega * current_time / (2. * cycles)) ** 2.) * np.sin(
-        tgt.omega * current_time)
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return phi
 
 
 def expiphi(current_time):
-    """
-    Exponentiation of Phi(t): e^(i*phi(t))
-    :param current_time: time
-    :return: e^(1j*phi(current time))
-    """
-    return -tgt.t0 * np.exp(1j * phi(current_time))
+
+    return np.exp(1j * phi(current_time))
 
 
 def expiphiconj(current_time):
-    """
-    Complex conjugate of exponentiation of Phi(t): e^-(i*phi)
-    :param current_time: time
-    :return: e^(-1j*phi(current_time)
-    """
-    return -tgt.t0 * np.exp(-1j * phi(current_time))
+
+    return np.exp(-1j * phi(current_time))
 
 
-########################################################################################################################
-# Define the Hamiltonian
-# H = -t0 sum(e^(-i phi(t)) c^*_{i,s} c_{i+1,s} - e^(i phi(t)) c_{i,s} c^*_{i+1,s}) + U sum(n_{i,up} n_i,down})
-# or H = sum(-t0 * expiphiconj * hop_right + t0 * expiphi * hop_left) + sum(U * interactions)
-########################################################################################################################
-# Specify the basis
-basis = spinful_fermion_basis_1d(L=L, Nf=(N_up, N_down))
+"""This is used for setting up Hamiltonian in Quspin."""
+dynamic_args = []
+
+"""System Evolution Time"""
+cycles = 10  # time in cycles of field frequency
+n_steps = 2000
+start = 0
+stop = cycles / lat.freq
+times, delta = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True)
+
+"""set up parameters for saving expectations later"""
+# Locate where you want to save your data
+datafolder = './Data/Expectations_TargetsForTracking/'
+# Create a tag so that the results may be imported
+filetag = 'TGTparams_{}sites-{}U-{}t0-{}a-{}cycles-{}steps-{}pbc'.format(
+    L, U, t0, a, cycles, n_steps, pbc
+)
+# Name the out file for export
+outfile = datafolder + filetag + '.npz'
+
+"""create basis"""
+# build spinful fermions basis.
+basis = spinful_fermion_basis_1d(L, Nf=(N_up, N_down))
+
+
+print('Hilbert space size: {0:d}.\n'.format(basis.Ns))
+
+"""building model"""
+# define site-coupling lists
+int_list = [[lat.U, i, i] for i in range(L)]  # onsite interaction
+
+# create static lists
+# Note that the pipe determines the spinfulness of the operator. | on the left corresponds to down spin, | on the right
+# is for up spin. For the onsite interaction here, we have:
+static_Hamiltonian_list = [
+    ["n|n", int_list],  # onsite interaction
+]
+
+# add dynamic lists
+hop_right = [[lat.t, i, i + 1] for i in range(L - 1)]  # hopping to the right OBC
+hop_left = [[-lat.t, i, i + 1] for i in range(L - 1)]  # hopping to the left OBC
+
+"""Add periodic boundaries"""
+if lat.pbc:
+    hop_right.append([lat.t, L - 1, 0])
+    hop_left.append([-lat.t, L - 1, 0])
+
+# After creating the site lists, we attach an operator and a time-dependent function to them
+dynamic_Hamiltonian_list = [
+    ["+-|", hop_left, expiphiconj, dynamic_args],  # up hop left
+    ["-+|", hop_right, expiphi, dynamic_args],  # up hop right
+    ["|+-", hop_left, expiphiconj, dynamic_args],  # down hop left
+    ["|-+", hop_right, expiphi, dynamic_args],  # down hop right
+]
+
+"""build the Hamiltonian for actually evolving this bastard."""
+# Hamiltonian builds an operator, the first argument is always the static operators, then the dynamic operators.
+ham = hamiltonian(static_Hamiltonian_list, dynamic_Hamiltonian_list, basis=basis)
+
+"""build up the other operator expectations here as a dictionary"""
+operator_dict = dict(H=ham)
 no_checks = dict(check_pcon=False, check_symm=False, check_herm=False)
-
-# Define onsite coupling lists, U * sum(n_{i, up}, n_{i, down})
-interactions = [[tgt.U, _, _] for _ in range(L)]
-# For hopping, the previous code sometimes uses -t0 for hop_left, and sometimes -t0 for hop right instead
-# To be clear, the following code is correct.
-hop_left = [[1, _, (_ + 1)] for _ in range(L - 1)]         # Allow OBC, but then add PBC
-hop_right = [[-1, _, (_ + 1)] for _ in range(L - 1)]       # Allow OBC, but then add PBC
-
-if pbc:
-    hop_left.append([1, L-1, 0])
-    hop_right.append([-1, L-1, 0])
-
-# Build the Hamiltonian
-static = [
-    ['n|n', interactions]   # up-down interactions
-]
-
-# Because the hop-left and -right operators are time dependent, they are placed here
-"""
-dynamic_arguments is meant to be a list of arguments passed to the function in the dynamic Hamiltonian
-However, we do not have a list of times to pass to the function, so right now it is blank
-This may be a source of problems.
-"""
-dynamic_arguments = []
-dynamic = [
-    ["+-|", hop_left, expiphiconj, dynamic_arguments],          # Spin-up hop left
-    ["|+-", hop_left, expiphiconj, dynamic_arguments],          # Spin-down hop left
-    ["-+|", hop_right, expiphi, dynamic_arguments],     # Spin-up hop right
-    ["|-+", hop_right, expiphi, dynamic_arguments]      # Spin-down hop right
-]
-
-# Actually build the Hamiltonian
-# For finding ground-state using Imaginary Time
-gs_ham = hamiltonian(static + [_[:2] for _ in dynamic], [], basis=basis, **no_checks)
-# Hamiltonian for propagation
-ham = hamiltonian(static, dynamic, basis=basis, **no_checks)
-
-########################################################################################################################
-# Define the operator dictionary. This can be used to get expectations, such as current
-########################################################################################################################
-
-op_dict = dict(H=ham)
-
-""" We are doing this to eventually get expectation of the current operator
-^J(t) = -i a t0 sum(e^(-i phi(t) c+_{j,s} c_{j+1,s} - H.c.)
-or J(t) = -1j * a * t0 * sum(expiphiconj * hop_right - Hermitian conjugate)
-"""
-
-# Neighbor interactions, terms are listed in static hamiltonian as there is no time dependence
-op_dict['neighbor'] = hamiltonian([["+-|", hop_left], ["|+-", hop_left]], [], basis=basis, **no_checks)
-
-# Hop Right terms, Empty lists for static Hamiltonian section.
-# Again, an empty list is used for the dynamic arguments. This could be an error source
-op_dict['left_hop_up'] = hamiltonian([], [["-+|", hop_left, expiphiconj, dynamic_arguments]],
-                                      basis=basis, **no_checks)
-op_dict['left_hop_down'] = hamiltonian([], [["|-+", hop_left, expiphiconj, dynamic_arguments]],
-                                        basis=basis, **no_checks)
-
-# Next, we need to obtain spin densities per site
-# This is an inefficient method, but at the current time, it works, so it is low priority on the changelist
-for _ in range(L):
+# hopping operators for building current. Note that the easiest way to build an operator is just to cast it as an
+# instance of the Hamiltonian class. Note in this instance the hops up and down have the e^iphi factor attached directly
+operator_dict['neighbour']= hamiltonian([["+-|", hop_left],["|+-", hop_left]],[], basis=basis, **no_checks)
+operator_dict["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+# #Add individual spin expectations
+for j in range(L):
     # spin up densities for each site
-    op_dict['n_up' + str(_)] = hamiltonian([["n|", [[1.0, _]]]], [], basis=basis, **no_checks)
+    operator_dict["nup" + str(j)] = hamiltonian([["n|", [[1.0, j]]]], [], basis=basis, **no_checks)
     # spin down
-    op_dict['n_down' + str(_)] = hamiltonian([["|n", [[1.0, _]]]], [], basis=basis, **no_checks)
-    # Doublon densities
-    op_dict["doublons" + str(_)] = hamiltonian([["n|n", [[1.0, _, _]]]], [], basis=basis, **no_checks)
+    operator_dict["ndown" + str(j)] = hamiltonian([["|n", [[1.0, j]]]], [], basis=basis, **no_checks)
+    # doublon densities
+    operator_dict["D" + str(j)] = hamiltonian([["n|n", [[1.0, j, j]]]], [], basis=basis, **no_checks)
 
-# Determine Hopping Operators for Later calculation
-hop_left_operator = hamiltonian([["+-|", hop_left], ["|+-", hop_left]], [], basis=basis, **no_checks)
-hop_right_operator = hamiltonian([["-+|", hop_right], ["|-+", hop_right]], [], basis=basis, **no_checks)
+"""build ground state"""
+print("calculating ground state")
+E, psi_0 = ham.eigsh(k=1, which='SA')
+# E, psi_0 = ham.eigh(time=0)
 
-########################################################################################################################
-# Get the Ground State, Evolve the Hamiltonian, And Calculate Expectations
-########################################################################################################################
-# Get the ground state
-it_groundstate = True
-if it_groundstate:
-    E, psi_0 = tgt.get_groundstate(H=gs_ham, imaginary_time=True, n_steps=10)
-else:
-    E, psi_0 = tgt.get_groundstate(H=ham, imaginary_time=False, n_steps=0)
-
-# Evolve the Hamiltonian
-print('Now evolving system')
-t_evolve_start = time()
-# psi = ham.evolve(v0=psi_0, t0=start, times=times, iterate=True, verbose=False)
-# Obs_vs_Time is designed to work with iterate=True, but the generator object is unrealistically difficult to work with
-# Until this is fixed, we can simply squeeze the result and directly return the array
-psi = np.squeeze(ham.evolve(v0=psi_0, t0=start, times=times, verbose=False))
-t_evolve_mid = time()
-print('System evolution complete. It took {:.3f} seconds.'.format(t_evolve_mid-t_evolve_start))
-
-print('Now Calculating Expectations')
-expectations = obs_vs_time(psi_t=psi, times=times, Obs_dict=op_dict)
+# apparently you can get a speedup for the groundstate calculation using this method with multithread. Note that it's
+# really not worth it unless you your number of sites gets _big_, and even then it's the time evolution which is going
+# to kill you:
+# E, psi_0 = eigh(ham.aslinearoperator(time=0), k=1, which='SA')
 
 
-current_sum_term = (expectations['left_hop_up'] + expectations['left_hop_down'])
-current = 1j * tgt.a * (current_sum_term - current_sum_term.conjugate())
+# alternate way of doing this
+# # psi_0=np.ones(ham.Ns)
+# psi_0=np.random.random(ham.Ns)
+# def imag_time(tau,phi):
+#
+# 	return -( ham.dot(phi,time=0))
+# taus=np.linspace(0,100,100)
+# psi_imag = evolve(psi_0, taus[0], taus, imag_time, iterate=False, atol=1E-12, rtol=1E-12,verbose=True,imag_time=True)
+# print(psi_imag.shape)
+# psi_0=psi_imag[:,-1]
+print(E)
+print(psi_0.shape)
+print('normalisation')
+# psi_0=psi_0[:,2]
+print(np.linalg.norm(psi_0))
+psi_0=psi_0/np.linalg.norm(psi_0)
+print("ground state calculated, energy is {:.2f}".format(E[0]))
+# psi_0.reshape((-1,))
+# psi_0=psi_0.flatten
+print('evolving system')
+ti = time()
+"""evolving system. In this simple case we'll just use the built in solver"""
+# this version returns the generator for psi
+# psi_t=ham.evolve(psi_0,0.0,times,iterate=True)
 
-# Store the field, current, times, and dt
-results = directory.bundle_results(expectations, phi(times), current, times, dt, psi_0, E)
+# this version returns psi directly, last dimension contains time dynamics. The squeeze is necessary for the
+# obs_vs_time to work properly
+psi_t = ham.evolve(psi_0, 0.0, times,verbose=True)
+psi_t = np.squeeze(psi_t)
+print("Evolution done! This one took {:.2f} seconds".format(time() - ti))
+# calculate the expectations for every bastard in the operator dictionary
+ti = time()
+# note that here the expectations
+expectations = obs_vs_time(psi_t, times, operator_dict)
+print(type(expectations))
+current_partial = (expectations['lhopup'] + expectations['lhopdown'])
+current = 1j * lat.a * (current_partial - current_partial.conjugate())
+expectations['current'] = current
+expectations['phi'] = phi(times)
+print("Expectations calculated! This took {:.2f} seconds".format(time() - ti))
 
+print("Saving Expectations. We have {} of them".format(len(expectations)))
+np.savez(outfile, **expectations)
 
-print('Checking for Solution Uniqueness')
-x_den = 2 * tgt.a * tgt.t0 * np.abs(hop_left_operator.expt_value(psi))
-x_t = current / x_den
-if all(_ < 0.9999999 for _ in np.abs(x_t)):
-    print('Solution is unique. Max value of X(t) = {:.7f}'.format(np.abs(x_t).max()))
-else:
-    print('Solution is not guaranteed to be unique. Max value of X(t) = {:.7f}'.format(np.abs(x_t).max()))
-
-print('Expectations Calculated. This took an additional {:.3f} seconds.'.format(time()-t_evolve_mid))
-
-########################################################################################################################
-# Check linearity of results
-########################################################################################################################
-
-
-def plot_spectrum(f, t):
-    """
-    Plot the High Harmonic Generation spectrum
-    """
-    # Power spectrum emitted is calculated using the Larmor formula
-    #   (https://en.wikipedia.org/wiki/Larmor_formula)
-    # which says that the power emitted is proportional to the square of the acceleration
-    # i.e., the RHS of the second Ehrenfest theorem
-
-    N = len(f)
-    k = np.arange(N)
-
-    # frequency range
-    omegas = (k - N / 2) * np.pi / (0.5 * t.max())
-
-    # spectra of the
-    spectrum = np.abs(
-        # used windows fourier transform to calculate the spectra
-        # rhttp://docs.scipy.org/doc/scipy/reference/tutorial/fftpack.html
-        fftpack.fft((-1) ** k * blackman(N) * f)
-    ) ** 2
-    spectrum /= spectrum.max()
-    plt.semilogy(omegas, spectrum)
-    plt.ylabel('spectrum (arbitrary units)')
-    plt.xlabel('frequency')
-    plt.ylim([1e-15, 1.])
-
-
-########################################################################################################################
-# Save Results and the Plot
-########################################################################################################################
-"""Save Results"""
-outfile = data_path + filetag + '.npz'
-print('Saving results here: {}'.format(outfile))
-np.savez(outfile, **results)
-
-fignum = 1
-plt_params = {'legend.fontsize': 'x-large',
-              'figure.figsize': (8, 7),
-              'axes.labelsize': 'x-large',
-              'axes.titlesize': 'xx-large',
-              'xtick.labelsize': 'x-large',
-              'ytick.labelsize': 'x-large'
-}
-plt.rcParams.update(plt_params)
+print('All finished. Total time was {:.2f} seconds using {:d} threads'.format((time() - t_init), threads))
+# npzfile = np.load(outfile)
+# print('npzfile.files: {}'.format(npzfile.files))
+# print('npzfile["1"]: {}'.format(npzfile["current"]))
+# newh=npzfile['H']
+# doublon=np.zeros(len(times))
+#
+# times=times*lat.freq
+# plt.plot(times,newh)
+# plt.show()
 
 """ Plot the Results """
+fignum = 1
 plt.figure(fignum)
 fignum += 1
-plt.plot(times, results['phi']/(0.5*np.pi))
-plt.xlabel('Time (t)')
-plt.ylabel('$\\Phi$ in units of $\\pi /2$')
+plt.plot(times, expectations['phi'])
+plt.ylabel('$\\Phi$')
 plt.tight_layout()
-plt.savefig(plot_path + 'Field_' + filetag + '.pdf')
+plt.savefig('./Plots/TargetField_plots/Field_' + filetag + '.pdf')
 
 plt.figure(fignum)
 fignum += 1
-plt.plot(times, results['current'])
-plt.xlabel('Time (t)')
+plt.plot(times, expectations['current'])
 plt.ylabel('Current')
 plt.tight_layout()
-plt.savefig(plot_path + 'Current_' + filetag + '.pdf')
-
-plt.figure(fignum)
-fignum += 1
-plt.plot(times, np.abs(x_t))
-plt.hlines(1.0, xmin=start, xmax=stop, colors='r', linestyles='--')
-plt.xlabel('Time (t)')
-plt.ylabel('|X(t)|')
-plt.tight_layout()
-plt.savefig(plot_path + 'X(t)_' + filetag + '.pdf')
+plt.savefig('./Plots/TargetField_plots/Current_' + filetag + '.pdf')
 
 plt.show()
