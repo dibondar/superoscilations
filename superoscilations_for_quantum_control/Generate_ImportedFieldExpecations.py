@@ -57,9 +57,11 @@ np.__config__.show()
 ########################################################################################################################
 
 """Laser Pulse parameters"""
-field = 32.9  # field angular frequency THz
-F0 = 4.5  # Field amplitude MV/cm
-a = 4   # Lattice constant Angstroms
+field = 32.9    # field angular frequency THz
+F0 = 10         # Field amplitude MV/cm
+a_tgt = 4
+a_scale = 5
+a = a_tgt * a_scale     # Lattice constant Angstroms
 
 """Parameters for a target or reference field"""
 # Hubbard model
@@ -68,12 +70,12 @@ N_up = L // 2 + L % 2   # number of fermions with spin up
 N_down = L // 2     # number of fermions with spin down
 N = N_up + N_down   # number of particles
 t0 = 0.52       # hopping strength
-U = 0.025 * t0    # interaction strength
+U = 1.0 * t0    # interaction strength
 pbc = True
 
 # Parameters for evolving the system
 cycles = 10     # time in cycles of field frequency
-n_steps = 4000  # Number of steps for time resolution
+n_steps = 10000  # Number of steps for time resolution
 
 # Bundle parameters to pass to Hubbard Model class for unit conversion
 tgt_params = dict(
@@ -92,17 +94,19 @@ tgt_params = dict(
     soc=0,      # No spin orbit coupling
     gamma=0,     #
     tracking=True,  # Are you loading a field for tracking
-    int_track=0,     # If so, you need to list the U for
+    int_track=0.0*t0,     # If so, you need to list the U for
+    a_scale=True,  # Used for scaling of lattice constant
+    lat_track=a_tgt,
     scf=True,
-    pulses=400,
-    reaping=False
+    pulses=26,
+    #reaping=False
 )
 
 # get the converted units for creating a target field
 tgt = fhmodel(**tgt_params)
 start = 0.0
 stop = tgt.stop
-times, dt = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True)
+times, dt = np.linspace(start, tgt.stop, num=n_steps, endpoint=True, retstep=True)
 
 ########################################################################################################################
 # Load the relevant file
@@ -116,12 +120,13 @@ load_path = loader['data path']
 load_tag = loader['tag']
 
 # If pasting a direct location, use this
-#loadfile = './Data/BestFit_SCF/SCFparams_10sites-0,049TrackedTo0,000U-0,52t0-4,5F0-4TrackedTo4a-10cycles-4000steps_N133pulses.npz'
-# Otherwise have the class file find it for you
+#loadfile= './Data/BestFit_SCF/SCFparams_10sites-0,520TrackedTo0,000U-0,52t0-4,5F0-120TrackedTo4a-10cycles-4000steps-17pulses.npz'# Otherwise have the class file find it for you
 loadfile = load_path + load_tag + tgt.tag + '.npz'
 print('Loaded file: {}'.format(loadfile))
 
 loaded_field = np.load(loadfile)['phi']
+print('Length of Times: {}'.format(len(times)))
+print('Length of Loaded Field: {}'.format(len(loaded_field)))
 phi = UnivariateSpline(times, loaded_field, k=3, s=0)
 
 # Now build directory for saving files
@@ -145,11 +150,11 @@ if compare:
     comp = fhmodel(
         nx=L,                       # L for system you want to compare to (should be the same)
         hopping=t0,                 # t0 of system you want to compare to (should be the same)
-        interaction=0.0,            # U of system you want to compare to
+        interaction=0.0*t0,            # U of system you want to compare to
         n_up=N_up,                  # (should be the same)
         n_down=N_down,              # (should be the same)
         angular_frequency=field,    # (should be the same)
-        lattice_constant=a,         # a of system you want to compare to
+        lattice_constant=a_tgt,     # a of system you want to compare to
         field_amplitude=F0,         # (should be the same)
         chem_potential=0,           # (should be the same)
         cycles=cycles,              # (should be the same)
@@ -158,7 +163,7 @@ if compare:
         soc=0,                      # No spin orbit coupling
         gamma=0,                    # No gamma
         tracking=False,             # Are you comparing to a field for tracking
-        int_track=0                 # If so, you need to list the U for the system you are tracking to
+        #int_track=0                 # If so, you need to list the U for the system you are tracking to
     )
     comp_lib = InitializeArchive(directory_number=sim_type_to_compare).get_dir()
     comp_path = comp_lib['data path']
@@ -415,4 +420,4 @@ outfile = data_path + filetag + '.npz'
 print('Saving results here: {}'.format(outfile))
 np.savez(outfile, **results)
 
-#plt.show()
+plt.show()

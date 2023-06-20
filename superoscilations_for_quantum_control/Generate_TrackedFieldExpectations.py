@@ -19,6 +19,8 @@ import numpy as np  # general math functions
 from scipy.sparse.linalg import eigsh
 from time import time  # tool for calculating computation time
 from scipy.interpolate import UnivariateSpline
+from scipy.signal.windows import blackman
+from scipy import fftpack
 import matplotlib.pyplot as plt  # plotting library
 from tqdm import tqdm
 from tools import HubbardModel as fhmodel, InitializeArchive
@@ -42,7 +44,7 @@ np.__config__.show()
 ########################################################################################################################
 """Laser Pulse parameters. These should remain constant across fields (with the exception of a)"""
 field = 32.9  # field angular frequency THz
-F0 = 4.5  # Field amplitude MV/cm
+F0 = 10  # Field amplitude MV/cm
 a_target = 4   # Lattice constant Angstroms
 
 """Parameters for a target or reference field"""
@@ -105,17 +107,18 @@ N_up = N_up_target          # number of fermions with spin up should be same as 
 N_down = N_down_target      # number of fermions with spin down should be same as target field
 N = N_up + N_down           # number of particles (should be same as target field)
 t0 = t0_target              # hopping strength, (Usually same as target field)
-U = 0.025 * t0                # interaction strength
+U = 1.0 * t0                # interaction strength
 
 # Scaling terms
-a_scaling = 1               # Used if you need to scale the lattice constant
+scaling = True
+a_scaling = 5              # Used if you need to scale the lattice constant
 j_scaling = 1               # Used if you are scaling the current up instead of the lattice constant
 a = a_target * a_scaling    # sets the lattice constant for the current system
-n_steps = 4000
+n_steps = 10000
 
 track_params = dict(nx=L, hopping=t0, interaction=U, n_up=N_up, n_down=N_down, angular_frequency=field,
                     lattice_constant=a, field_amplitude=F0, chem_potential=0, cycles=cycles, n_steps=n_steps,
-                    ny=0, soc=0, gamma=0, tracking=True, int_track=U_target, lat_track=a_target)
+                    ny=0, soc=0, gamma=0, tracking=True, int_track=U_target, a_scale=scaling, lat_track=a_target)
 track = fhmodel(**track_params)
 # Timing parameters must remain the same for both systems
 start = 0.0
@@ -198,6 +201,12 @@ def wrapper(new_phi, prev_phi):
         new_phi -= 2 * np.pi
         val = new_phi - prev_phi
     while val < -np.pi:
+        new_phi += 2 * np.pi
+        val = new_phi - prev_phi
+    if val > np.pi:
+        new_phi -= 2 * np.pi
+        val = new_phi - prev_phi
+    elif val < -np.pi:
         new_phi += 2 * np.pi
         val = new_phi - prev_phi
     return new_phi
@@ -377,6 +386,34 @@ outfile = data_path + filetag + '.npz'
 print('Saving expectations here: {}'.format(outfile))
 np.savez(outfile, **results)
 
+def plot_spectrum(f, t, sim, **kwargs):
+    """
+    Plot the High Harmonic Generation spectrum
+    """
+    # Power spectrum emitted is calculated using the Larmor formula
+    #   (https://en.wikipedia.org/wiki/Larmor_formula)
+    # which says that the power emitted is proportional to the square of the acceleration
+    # i.e., the RHS of the second Ehrenfest theorem
+
+    N = len(f)
+    k = np.arange(N)
+
+    # frequency range
+    omegas = (k - N / 2) * np.pi / (0.5 * t.max())
+
+    # spectra of the
+    spectrum = np.abs(
+        # used windows fourier transform to calculate the spectra
+        # rhttp://docs.scipy.org/doc/scipy/reference/tutorial/fftpack.html
+        fftpack.fft((-1) ** k * blackman(N) * f)
+    ) ** 2
+    spectrum /= spectrum.max()
+    plt.semilogy(omegas / sim.omega, spectrum, **kwargs, label=get)
+    plt.ylabel('spectrum (arbitrary units)')
+    plt.xlabel(r'frequency / $\omega$')
+    plt.xlim([0, 20])
+    plt.ylim([1e-15, 1.])
+
 fignum = 1
 plt_params = {'legend.fontsize': 'x-large',
               'figure.figsize': (8, 7),
@@ -428,6 +465,19 @@ pm = np.array(phi_track)-np.array(theta_track)
 plt.plot(times, pm)
 plt.xlabel('Time (a.u.)')
 plt.ylabel('Phi - Theta')
+
+
+plt.figure(fignum)
+fignum += 1
+get = 'Transform Limited Pulse'
+plot_spectrum(tgt_phi_interp(times), times, tgt)
+get = 'Tracking Field'
+plot_spectrum(results['phi'], times, track)
+get = 'Current'
+plot_spectrum(results['current'], times, track, linestyle='--')
+plt.legend()
+plt.tight_layout()
+plt.savefig(plot_path + 'SpectrumAnalysis' + filetag + '.pdf')
 plt.show()
 
 print('Done')

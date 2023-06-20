@@ -106,8 +106,8 @@ class InitializeArchive:
 
 class HubbardModel:
     def __init__(self, hopping, interaction, n_up, n_down, angular_frequency, lattice_constant, field_amplitude,
-                 chem_potential=0, nx=4, ny=0, cycles=10, n_steps=2000, soc=0, gamma=0, tracking=False, scf=False,
-                 reaping=False, int_track=0, lat_track=4, pulses=0):
+                 chem_potential=0, nx=4, ny=0, cycles=10, n_steps=2000, pbc=True, soc=0, gamma=0, tracking=False,
+                 scf=False, reaping=False, int_track=0, a_scale=False, J_scale=False, lat_track=4, J_track=1, pulses=0):
         """
         A class for Establishing the Hubbard Model. Adapted to
         input units: THz (field), eV (t, U), MV/cm (peak amplitude), Angstroms (lattice cst)
@@ -152,25 +152,26 @@ class HubbardModel:
         self.cycles = cycles
         self.n_steps = n_steps
         self.stop = self.cycles / self.frequency
-        if tracking:
-            tag = 'params_{}sites-{:.3f}TrackedTo{:.3f}U-{:.2f}t0-{}F0-{}TrackedTo{}a-{}cycles-{}steps'.format(
-                self.L, interaction, int_track, hopping, field_amplitude, lattice_constant, lat_track, self.cycles,
-                self.n_steps
-            )
-        else:
-            tag = 'params_{}sites-{:.3f}U-{:.2f}t0-{}F0-{}a-{}cycles-{}steps'.format(
-                self.L, interaction, hopping, field_amplitude, lattice_constant, self.cycles, self.n_steps
-            )
+        self.pbc = pbc
+        tag = 'params_{}sites-{:.3f}U-{:.2f}t0-{}F0-{}a-{}cycles-{}steps'.format(
+            self.L, interaction, hopping, field_amplitude, lattice_constant, self.cycles, self.n_steps
+        )
         if scf:
             if reaping:
                 tag += '-{}reaped_pulses'.format(pulses)
             else:
                 tag += '-{}pulses'.format(pulses)
+        if tracking:
+            tag += 'TrackedToSystem-{:.3f}U'.format(int_track)
+        if a_scale:
+            tag += '-{}a'.format(lat_track)
+        if J_scale:
+            tag += '-{}Jscaling'.format(J_track)
         self.tag = tag.replace('.', ',')
-        print("Angular frequency= %.3f" % self.omega)
+        """print("Angular frequency= %.3f" % self.omega)
         print("Frequency= %.3f" % self.frequency)
         print("Lattice constant= %.3f" % self.a)
-        print("Field Amplitude= %.3f" % self.F0)
+        print("Field Amplitude= %.3f" % self.F0)"""
 
 
     def get_groundstate(self, H, imaginary_time=True, n_steps=5):
@@ -183,20 +184,20 @@ class HubbardModel:
         """
         start_time = time()
         if imaginary_time:
-            print('Calculating ground state using imaginary time method with Quspin Evolve')
+            #print('Calculating ground state using imaginary time method with Quspin Evolve')
             it_steps = np.array([n_steps])          # Number of steps for imaginary time propagation
             psi_0 = H.evolve(np.ones([H.Ns, 1]) + 0j, 0, it_steps, imag_time=True, verbose=False).reshape(-1)
             psi_0 /= np.linalg.norm(psi_0)
             gs_energy = H.expt_value(psi_0)
         else:
-            print('Calculating ground state using Quspin Eigsh')
+            #print('Calculating ground state using Quspin Eigsh')
             gs_energy, psi_0 = H.eigsh(k=1, which='SA')
             gs_energy = gs_energy[-1]
             psi_0 /= np.linalg.norm(psi_0)
         gs_energy = np.array([np.real(gs_energy)])[0]
-        print('Ground state calculation complete. This took {:.1f} seconds'.format(time()-start_time))
+        """print('Ground state calculation complete. This took {:.1f} seconds'.format(time()-start_time))
         print('Normalization of Psi_0: {:.4f}'.format(np.linalg.norm(psi_0.reshape(-1))))
-        print('Ground State Energy: {:.4f}'.format(gs_energy))
+        print('Ground State Energy: {:.4f}'.format(gs_energy))"""
         return gs_energy, psi_0
 
     def tracking1D(self, target_current, t, nearest_neighbor_expectations):

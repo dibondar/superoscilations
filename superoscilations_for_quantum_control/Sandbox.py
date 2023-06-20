@@ -46,7 +46,7 @@ np.__config__.show()
 
 """Laser Pulse parameters"""
 field = 32.9  # field angular frequency THz
-F0 = 4.5  # Field amplitude MV/cm
+F0 = 10 # Field amplitude MV/cm
 a = 4   # Lattice constant Angstroms
 
 """Parameters for a target or reference field"""
@@ -56,12 +56,12 @@ N_up = L // 2 + L % 2   # number of fermions with spin up
 N_down = L // 2     # number of fermions with spin down
 N = N_up + N_down   # number of particles
 t0 = 0.52       # hopping strength
-U = 0.05 * t0    # interaction strength
+U = 0.00 * t0    # interaction strength
 pbc = True
 
 # Parameters for evolving the system
 cycles = 10     # time in cycles of field frequency
-n_steps = 4000  # Number of steps for time resolution
+n_steps = 10000  # Number of steps for time resolution
 
 ########################################################################################################################
 # Do you need to compare these results to something else
@@ -78,7 +78,7 @@ if compare:
         n_down=N_down,              # (should be the same)
         angular_frequency=field,    # (should be the same)
         lattice_constant=a,         # a of system you want to compare to
-        field_amplitude=F0,         # (should be the same)
+        field_amplitude=4.0,         # (should be the same)
         chem_potential=0,           # (should be the same)
         cycles=cycles,              # (should be the same)
         n_steps=10000,            # number of steps for system you want to compare to
@@ -86,7 +86,7 @@ if compare:
         soc=0,                      # No spin orbit coupling
         gamma=0,                    # No gamma
         tracking=False,             # Are you comparing to a field for tracking
-        int_track=0                 # If so, you need to list the U for the system you are tracking to
+        int_track=1                 # If so, you need to list the U for the system you are tracking to
     )
     comp_lib = InitializeArchive(directory_number=sim_type_to_compare).get_dir()
     comp_path = comp_lib['data path']
@@ -99,7 +99,7 @@ if compare:
 # Load the relevant file
 ########################################################################################################################
 # Reference: 0 for Targets, 1 for Tracking, 2 for superoscillations, 3 for importing anything else
-sim_type_to_be_loaded = 3
+sim_type_to_be_loaded = 1
 
 # Target the filed to be loaded
 loader = InitializeArchive(directory_number=sim_type_to_be_loaded).get_dir()

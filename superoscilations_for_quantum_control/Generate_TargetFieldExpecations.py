@@ -48,7 +48,7 @@ np.__config__.show()
 
 """Laser Pulse parameters"""
 field = 32.9  # field angular frequency THz
-F0 = 4.5  # Field amplitude MV/cm
+F0 = 10  # Field amplitude MV/cm
 a = 4   # Lattice constant Angstroms
 
 """Parameters for a target or reference field"""
@@ -58,7 +58,7 @@ N_up = L // 2 + L % 2   # number of fermions with spin up
 N_down = L // 2     # number of fermions with spin down
 N = N_up + N_down   # number of particles
 t0 = 0.52       # hopping strength
-U = 0.0 * t0    # interaction strength
+U = 1.0 * t0    # interaction strength
 pbc = True
 
 # Parameters for evolving the system
