@@ -176,8 +176,8 @@ This may be a source of problems.
 """
 dynamic_arguments = []
 dynamic = [
-    ["+-|", hop_left, expiphiconj, dynamic_arguments],          # Spin-up hop left
-    ["|+-", hop_left, expiphiconj, dynamic_arguments],          # Spin-down hop left
+    ["+-|", hop_left, expiphiconj, dynamic_arguments],  # Spin-up hop left
+    ["|+-", hop_left, expiphiconj, dynamic_arguments],  # Spin-down hop left
     ["-+|", hop_right, expiphi, dynamic_arguments],     # Spin-up hop right
     ["|-+", hop_right, expiphi, dynamic_arguments]      # Spin-down hop right
 ]
